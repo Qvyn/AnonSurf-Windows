@@ -18,6 +18,10 @@ class TorError(RuntimeError):
 
 
 class TorController:
+    QUIET_NOTICE_FRAGMENTS = (
+        "Have tried resolving or connecting to address '[scrubbed]'",
+    )
+
     def __init__(
         self,
         tor_path: str,
@@ -65,7 +69,8 @@ class TorController:
         for raw in self.process.stdout:
             line = raw.rstrip()
             self._line_queue.put(line)
-            self.logger(line)
+            if self.should_display_log_line(line):
+                self.logger(line)
             marker = "Bootstrapped "
             if marker in line:
                 try:
@@ -73,6 +78,11 @@ class TorController:
                     self._bootstrap = max(self._bootstrap, int(percent_text))
                 except (IndexError, ValueError):
                     pass
+
+    @classmethod
+    def should_display_log_line(cls, line: str) -> bool:
+        """Hide Tor notices already represented by a safer bridge summary."""
+        return not any(fragment in line for fragment in cls.QUIET_NOTICE_FRAGMENTS)
 
     def start(self, timeout: float = 120.0) -> None:
         self.validate()

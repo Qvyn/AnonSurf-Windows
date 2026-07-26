@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urlsplit
 
+DESTINATION_ERROR_LOG_INTERVAL = 10 * 60
+OTHER_EXPECTED_ERROR_LOG_INTERVAL = 60
+
 
 class ProxyBridgeError(RuntimeError):
     pass
@@ -202,7 +205,7 @@ class HTTPToSocksBridge:
         self.logger = logger or (lambda _message: None)
         self._server: _ThreadingServer | None = None
         self._thread: threading.Thread | None = None
-        self._last_expected_error: tuple[str, float] | None = None
+        self._expected_error_last_log: dict[str, float] = {}
         self._active_sockets: set[socket.socket] = set()
         self._active_sockets_lock = threading.Lock()
 
@@ -289,10 +292,15 @@ class HTTPToSocksBridge:
 
     def _log_expected_error(self, message: str) -> None:
         now = time.monotonic()
-        previous = self._last_expected_error
-        if previous and previous[0] == message and now - previous[1] < 30:
+        interval = (
+            DESTINATION_ERROR_LOG_INTERVAL
+            if "SOCKS code 4" in message
+            else OTHER_EXPECTED_ERROR_LOG_INTERVAL
+        )
+        previous = self._expected_error_last_log.get(message)
+        if previous is not None and now - previous < interval:
             return
-        self._last_expected_error = (message, now)
+        self._expected_error_last_log[message] = now
         self.logger(f"{message}. No direct connection was attempted.")
 
     def _handle_client(self, handler: socketserver.StreamRequestHandler) -> None:

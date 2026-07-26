@@ -171,6 +171,48 @@ def make_app_icon(active: bool = False) -> QIcon:
     return QIcon(pixmap)
 
 
+class ConnectionLedWidget(QWidget):
+    COLORS = (
+        ("#ff3b4f", "#451820"),
+        ("#ffc43d", "#493a16"),
+        ("#20df83", "#123d2c"),
+    )
+    STATE_INDEX = {
+        "disconnected": 0,
+        "interrupted": 1,
+        "connected": 2,
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._state = "disconnected"
+        self.setFixedSize(76, 24)
+
+    def set_state(self, state: str) -> None:
+        if state not in self.STATE_INDEX or state == self._state:
+            return
+        self._state = state
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        active_index = self.STATE_INDEX[self._state]
+        for index, (bright, dim) in enumerate(self.COLORS):
+            x = 4 + index * 24
+            color = QColor(bright if index == active_index else dim)
+            painter.setPen(QPen(QColor("#31415b"), 1))
+            painter.setBrush(color)
+            painter.drawEllipse(x, 4, 16, 16)
+            if index == active_index:
+                painter.setPen(Qt.PenStyle.NoPen)
+                highlight = QColor("#ffffff")
+                highlight.setAlpha(115)
+                painter.setBrush(highlight)
+                painter.drawEllipse(x + 4, 7, 5, 5)
+        painter.end()
+
+
 class AppWindow(QMainWindow):
     log_received = Signal(str)
     ui_requested = Signal(object)
@@ -271,6 +313,8 @@ class AppWindow(QMainWindow):
         self.ip_label.setObjectName("muted")
         status_row.addWidget(self.ip_label)
         status_row.addStretch(1)
+        self.connection_leds = ConnectionLedWidget()
+        status_row.addWidget(self.connection_leds)
         connection_layout.addLayout(status_row)
 
         button_row = QHBoxLayout()
@@ -387,6 +431,13 @@ class AppWindow(QMainWindow):
         icon = make_app_icon(self.active and state == "on")
         self.tray.setIcon(icon)
         self.setWindowIcon(icon)
+        led_state = {
+            "off": "disconnected",
+            "error": "disconnected",
+            "busy": "interrupted",
+            "on": "connected",
+        }[state]
+        self.connection_leds.set_state(led_state)
 
     def _update_controls(self) -> None:
         active_controls = self.active and not self.busy
@@ -689,25 +740,24 @@ class AppWindow(QMainWindow):
             return
 
         if healthy:
-            if self._health_failures:
-                self.log("Automatic connection check recovered without a restart.")
             self._health_failures = 0
+            self.connection_leds.set_state("connected")
             if ip:
                 self.ip_label.setText(f"Tor IP: {ip}")
             QTimer.singleShot(HEALTH_CHECK_INTERVAL_MS, self._health_tick)
             return
 
         self._health_failures += 1
-        self.log(
-            f"Connection health check failed "
-            f"({self._health_failures}/{HEALTH_FAILURE_LIMIT}): {detail}"
-        )
+        self.connection_leds.set_state("interrupted")
         if self._health_failures < HEALTH_FAILURE_LIMIT:
             QTimer.singleShot(HEALTH_RETRY_INTERVAL_MS, self._health_tick)
             return
 
         self._health_failures = 0
-        self.log("Automatic recovery is restarting and verifying the Tor connection.")
+        self.log(
+            "Connection health check failed twice; automatic recovery is restarting "
+            f"and verifying Tor. Last error: {detail}"
+        )
         QTimer.singleShot(HEALTH_CHECK_INTERVAL_MS, self._health_tick)
         self._run_worker(self._refresh_connection)
 
